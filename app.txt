@@ -1,0 +1,514 @@
+import React, { useEffect, useRef, useState } from "react";
+
+interface PlayerProps {
+  streamUrl: string;
+}
+
+const NormalPlayer: React.FC<PlayerProps> = ({ streamUrl }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+
+    const video = videoRef.current;
+    setIsLoading(true);
+    setError(null);
+
+    // Cleanup previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    // Check if it's an HLS stream
+    if (streamUrl.includes(".m3u8")) {
+      // Dynamic import of HLS.js
+      import("hls.js")
+        .then(({ default: Hls }) => {
+          if (Hls.isSupported()) {
+            const hls = new Hls({
+              enableWorker: false,
+              lowLatencyMode: false,
+              backBufferLength: 90,
+              // More robust error recovery
+              fragLoadingTimeOut: 20000,
+              manifestLoadingTimeOut: 10000,
+              levelLoadingTimeOut: 10000,
+            });
+
+            hlsRef.current = hls;
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              console.log("HLS manifest parsed successfully");
+              setIsLoading(false);
+              video.play().catch((err) => {
+                console.warn("Autoplay prevented:", err);
+                setError("Click to play video");
+              });
+            });
+
+            hls.on(Hls.Events.ERROR, (event, data) => {
+              console.error("HLS Error:", data);
+
+              if (data.fatal) {
+                switch (data.type) {
+                  case Hls.ErrorTypes.NETWORK_ERROR:
+                    console.log("Network error, trying to recover...");
+                    hls.startLoad();
+                    break;
+                  case Hls.ErrorTypes.MEDIA_ERROR:
+                    console.log("Media error, trying to recover...");
+                    hls.recoverMediaError();
+                    break;
+                  default:
+                    setError(`Fatal HLS error: ${data.details}`);
+                    hls.destroy();
+                    break;
+                }
+              } else {
+                console.warn("Non-fatal HLS error:", data);
+              }
+            });
+
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
+          } else {
+            setError("HLS is not supported in this browser");
+            setIsLoading(false);
+          }
+        })
+        .catch(() => {
+          setError("Failed to load HLS library");
+          setIsLoading(false);
+        });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // Safari native HLS support
+      video.src = streamUrl;
+      video.addEventListener("loadeddata", () => setIsLoading(false));
+      video.addEventListener("error", () => {
+        setError("Failed to load video");
+        setIsLoading(false);
+      });
+    } else {
+      // Direct video file
+      video.src = streamUrl;
+      video.addEventListener("loadeddata", () => setIsLoading(false));
+      video.addEventListener("error", () => {
+        setError("Failed to load video");
+        setIsLoading(false);
+      });
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [streamUrl]);
+
+  const handlePlayClick = () => {
+    if (videoRef.current) {
+      videoRef.current.play().catch((err) => {
+        console.error("Play failed:", err);
+      });
+      setError(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center h-screen bg-black">
+      {isLoading && (
+        <div className="text-white text-xl mb-4">Loading stream...</div>
+      )}
+      {error && (
+        <div className="text-center mb-4">
+          <div className="text-red-400 text-xl mb-2">Error: {error}</div>
+          <button
+            onClick={handlePlayClick}
+            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            Try to Play
+          </button>
+        </div>
+      )}
+      <video
+        ref={videoRef}
+        controls
+        playsInline
+        muted
+        className="max-h-4/5 max-w-4/5"
+        style={{ display: isLoading ? "none" : "block" }}
+        onError={() => setError("Video playback error")}
+        onLoadStart={() => setIsLoading(true)}
+        onCanPlay={() => setIsLoading(false)}
+      />
+    </div>
+  );
+};
+
+// Simple Three.js based VR player (more reliable than A-Frame in React)
+const VRPlayer: React.FC<PlayerProps> = ({ streamUrl }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isVRMode, setIsVRMode] = useState(false);
+  const sceneRef = useRef<any>(null);
+  const rendererRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  const animationIdRef = useRef<number>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const initThreeJS = async () => {
+      try {
+        // Dynamic import of Three.js
+        const THREE = await import("three");
+
+        if (!mounted || !containerRef.current) return;
+
+        const container = containerRef.current;
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(
+          75,
+          width / height,
+          0.1,
+          1000
+        );
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+
+        renderer.setSize(width, height);
+        renderer.setClearColor(0x000000);
+        container.appendChild(renderer.domElement);
+
+        // Create video texture
+        const video = videoRef.current;
+        if (!video) return;
+
+        video.crossOrigin = "anonymous";
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+
+        const texture = new THREE.VideoTexture(video);
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+
+        // Create sphere geometry for 360 video
+        const geometry = new THREE.SphereGeometry(500, 60, 40);
+        // Flip the geometry inside out
+        geometry.scale(-1, 1, 1);
+
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        scene.add(mesh);
+
+        // Position camera
+        camera.position.set(0, 0, 0);
+
+        // Mouse controls
+        let isMouseDown = false;
+        let mouseX = 0;
+        let mouseY = 0;
+        let lon = 0;
+        let lat = 0;
+        let phi = 0;
+        let theta = 0;
+
+        const onMouseDown = (event: MouseEvent) => {
+          event.preventDefault();
+          isMouseDown = true;
+          mouseX = event.clientX;
+          mouseY = event.clientY;
+        };
+
+        const onMouseMove = (event: MouseEvent) => {
+          if (!isMouseDown) return;
+
+          lon += (mouseX - event.clientX) * 0.1;
+          lat -= (event.clientY - mouseY) * 0.1;
+          lat = Math.max(-85, Math.min(85, lat));
+
+          mouseX = event.clientX;
+          mouseY = event.clientY;
+        };
+
+        const onMouseUp = () => {
+          isMouseDown = false;
+        };
+
+        // Touch controls
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        const onTouchStart = (event: TouchEvent) => {
+          if (event.touches.length === 1) {
+            touchStartX = event.touches[0].clientX;
+            touchStartY = event.touches[0].clientY;
+          }
+        };
+
+        const onTouchMove = (event: TouchEvent) => {
+          if (event.touches.length === 1) {
+            event.preventDefault();
+            lon += (touchStartX - event.touches[0].clientX) * 0.1;
+            lat -= (event.touches[0].clientY - touchStartY) * 0.1;
+            lat = Math.max(-85, Math.min(85, lat));
+
+            touchStartX = event.touches[0].clientX;
+            touchStartY = event.touches[0].clientY;
+          }
+        };
+
+        // Add event listeners
+        renderer.domElement.addEventListener("mousedown", onMouseDown);
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+        renderer.domElement.addEventListener("touchstart", onTouchStart);
+        renderer.domElement.addEventListener("touchmove", onTouchMove);
+
+        // Animation loop
+        const animate = () => {
+          if (!mounted) return;
+
+          animationIdRef.current = requestAnimationFrame(animate);
+
+          phi = THREE.MathUtils.degToRad(90 - lat);
+          theta = THREE.MathUtils.degToRad(lon);
+
+          camera.lookAt(
+            Math.sin(phi) * Math.cos(theta),
+            Math.cos(phi),
+            Math.sin(phi) * Math.sin(theta)
+          );
+
+          renderer.render(scene, camera);
+        };
+
+        // Handle resize
+        const onWindowResize = () => {
+          if (!container) return;
+          const newWidth = container.clientWidth;
+          const newHeight = container.clientHeight;
+          camera.aspect = newWidth / newHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(newWidth, newHeight);
+        };
+
+        window.addEventListener("resize", onWindowResize);
+
+        // Start animation
+        animate();
+
+        // Store references
+        sceneRef.current = scene;
+        rendererRef.current = renderer;
+        cameraRef.current = camera;
+
+        // Load video
+        video.addEventListener("loadeddata", () => {
+          setIsLoading(false);
+          video.play().catch((err) => {
+            setError("Click to start VR experience");
+          });
+        });
+
+        video.addEventListener("error", () => {
+          setError("Failed to load VR video");
+          setIsLoading(false);
+        });
+
+        video.src = streamUrl;
+
+        // Cleanup function
+        return () => {
+          renderer.domElement.removeEventListener("mousedown", onMouseDown);
+          document.removeEventListener("mousemove", onMouseMove);
+          document.removeEventListener("mouseup", onMouseUp);
+          renderer.domElement.removeEventListener("touchstart", onTouchStart);
+          renderer.domElement.removeEventListener("touchmove", onTouchMove);
+          window.removeEventListener("resize", onWindowResize);
+
+          if (animationIdRef.current) {
+            cancelAnimationFrame(animationIdRef.current);
+          }
+
+          if (container && renderer.domElement) {
+            container.removeChild(renderer.domElement);
+          }
+
+          renderer.dispose();
+          geometry.dispose();
+          material.dispose();
+          texture.dispose();
+        };
+      } catch (err) {
+        console.error("Failed to initialize Three.js:", err);
+        setError("Failed to initialize VR environment");
+        setIsLoading(false);
+      }
+    };
+
+    initThreeJS();
+
+    return () => {
+      mounted = false;
+      if (animationIdRef.current) {
+        cancelAnimationFrame(animationIdRef.current);
+      }
+    };
+  }, [streamUrl]);
+
+  const handleStartVideo = () => {
+    if (videoRef.current) {
+      videoRef.current.play().catch((err) => {
+        console.error("Failed to start video:", err);
+      });
+      setError(null);
+    }
+  };
+
+  return (
+    <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
+          <div className="text-white text-xl">Loading VR experience...</div>
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
+          <div className="text-center">
+            <div className="text-red-400 text-xl mb-4">{error}</div>
+            <button
+              onClick={handleStartVideo}
+              className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+            >
+              Start VR Experience
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="absolute top-4 right-4 z-20 text-white bg-black bg-opacity-70 p-2 rounded text-sm">
+        Click and drag to look around • Touch and drag on mobile
+      </div>
+
+      <video
+        ref={videoRef}
+        style={{ display: "none" }}
+        playsInline
+        muted
+        loop
+        crossOrigin="anonymous"
+      />
+
+      <div
+        ref={containerRef}
+        style={{ width: "100%", height: "100%", cursor: "grab" }}
+        onMouseDown={(e) => (e.currentTarget.style.cursor = "grabbing")}
+        onMouseUp={(e) => (e.currentTarget.style.cursor = "grab")}
+      />
+    </div>
+  );
+};
+
+const App: React.FC = () => {
+  const [mode, setMode] = useState<"normal" | "vr">("normal");
+
+  // Alternative working streams - try these if others fail
+  const streams = {
+    normal: [
+      "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+      "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+      "https://bitmovin-a.akamaihd.net/content/MI201109210084_1/m3u8s/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8",
+    ],
+    vr: [
+      "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+      "https://sample-videos.com/zip/10/mp4/SampleVideo_1280x720_1mb.mp4",
+      "https://www.learningcontainer.com/wp-content/uploads/2020/05/sample-mp4-file.mp4",
+    ],
+  };
+
+  const [currentStreamIndex, setCurrentStreamIndex] = useState(0);
+
+  const currentStream =
+    mode === "normal"
+      ? streams.normal[currentStreamIndex]
+      : streams.vr[currentStreamIndex];
+
+  const tryNextStream = () => {
+    const maxIndex =
+      mode === "normal" ? streams.normal.length - 1 : streams.vr.length - 1;
+    if (currentStreamIndex < maxIndex) {
+      setCurrentStreamIndex(currentStreamIndex + 1);
+    } else {
+      setCurrentStreamIndex(0);
+    }
+  };
+
+  const switchMode = (newMode: "normal" | "vr") => {
+    setMode(newMode);
+    setCurrentStreamIndex(0); // Reset to first stream when switching modes
+  };
+
+  return (
+    <div className="relative">
+      <div className="absolute top-4 left-4 z-50 space-x-2">
+        <button
+          onClick={() => switchMode("normal")}
+          className={`px-4 py-2 rounded transition-colors ${
+            mode === "normal"
+              ? "bg-blue-600 text-white"
+              : "bg-blue-500 text-white hover:bg-blue-600"
+          }`}
+        >
+          Normal Stream
+        </button>
+        <button
+          onClick={() => switchMode("vr")}
+          className={`px-4 py-2 rounded transition-colors ${
+            mode === "vr"
+              ? "bg-green-600 text-white"
+              : "bg-green-500 text-white hover:bg-green-600"
+          }`}
+        >
+          VR Stream
+        </button>
+        <button
+          onClick={tryNextStream}
+          className="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600"
+        >
+          Try Next Stream
+        </button>
+      </div>
+
+      <div className="absolute top-16 left-4 z-50 text-white bg-black bg-opacity-70 p-2 rounded text-xs max-w-sm">
+        <div className="mb-1">Current: {currentStream}</div>
+        <div>Mode: {mode === "normal" ? "HLS Streaming" : "360° VR"}</div>
+        {mode === "vr" && (
+          <div className="text-yellow-300 mt-1">
+            ⚠️ Only proper 360° videos work correctly
+          </div>
+        )}
+      </div>
+
+      {mode === "normal" ? (
+        <NormalPlayer key={currentStream} streamUrl={currentStream} />
+      ) : (
+        <VRPlayer key={currentStream} streamUrl={currentStream} />
+      )}
+    </div>
+  );
+};
+
+export default App;
