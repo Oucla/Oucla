@@ -1,5 +1,13 @@
+import Hero from "@/components/home/Hero";
+import Events from "@/components/home/Events";
+
 const Home = () => {
-  return <div>Home</div>;
+  return (
+    <div>
+      <Hero />
+      <Events />
+    </div>
+  );
 };
 
 export default Home;

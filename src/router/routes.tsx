@@ -8,6 +8,7 @@ const Home = lazy(() => import("@/views/Home"));
 const Dashboard = lazy(() => import("@/views/Dashboard/Home"));
 import LiveStream from "@/views/Dashboard/LiveStream";
 import Events from "@/views/Dashboard/Events";
+import EventDetail from "@/views/EventDetails";
 import Revenue from "@/views/Dashboard/Revenue";
 import TicketManagement from "@/views/Dashboard/TicketManagement";
 
@@ -15,6 +16,11 @@ export const Routes: RouteType[] = [
   {
     path: RouterConstantUtil.page.home,
     component: Home,
+    metadata: { isAuth: false },
+  },
+  {
+    path: RouterConstantUtil.page.eventDetails,
+    component: EventDetail,
     metadata: { isAuth: false },
   },
   {

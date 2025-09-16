@@ -2,6 +2,7 @@ export const RouterConstantUtil = {
   page: {
     notFound: "*",
     home: "/",
+    eventDetails: "/event-details",
     eventOwner: {
       HOME: "/dashboard",
       EVENTS: "/events",
